@@ -1,0 +1,469 @@
+import re
+import sys
+
+import pytest
+
+import codejourney
+from codejourney import CollectionSnapshot, ObjectSnapshot, TraceResult, run_viz
+
+
+def test_run_viz_returns_structured_trace_for_code():
+    result = run_viz("answer = 40\nanswer += 2\n")
+
+    assert isinstance(result, TraceResult)
+    line_events = [event for event in result.events if event.event == "line"]
+    assert [event.line_number for event in line_events] == [1, 2]
+    assert [event.source_line for event in line_events] == ["answer = 40", "answer += 2"]
+    assert "answer" in line_events[1].changed_variables
+    assert line_events[1].after["answer"] == 40
+    assert result.events[-1].event == "return"
+    assert result.events[-1].after["answer"] == 42
+    assert result.error is None
+    assert result.truncated is False
+    assert "<!doctype html>" not in result._repr_html_().lower()
+
+
+def test_run_viz_traces_function_calls_and_source_lines():
+    result = run_viz("def add(a, b):\n    return a + b\n\nanswer = add(2, 3)\n")
+
+    line_events = [event for event in result.events if event.event == "line"]
+    assert any(event.line_number == 2 for event in line_events)
+    assert any(event.line_number == 4 for event in line_events)
+    assert line_events[-1].line_number == 2
+    assert result.events[-1].after["answer"] == 5
+
+
+def test_collection_values_are_snapshotted_and_mutations_are_detected():
+    result = run_viz("items = [1]\nitems.append(2)\n")
+    events = [event for event in result.events if event.event == "line"]
+
+    assert events[1].after["items"] == [1]
+    final_event = result.events[-1]
+    assert final_event.before["items"] == [1]
+    assert final_event.after["items"] == [1, 2]
+    assert "items" in final_event.changed_variables
+
+
+def test_dictionary_snapshots_use_structured_data():
+    result = run_viz("data = {'a': 1}\ndata['b'] = 2\n")
+    snapshots = [event.after["data"] for event in result.events if "data" in event.after]
+
+    assert snapshots
+    assert isinstance(snapshots[-1], CollectionSnapshot)
+    assert snapshots[-1].items == (("a", 1), ("b", 2))
+
+
+def test_unsupported_values_do_not_call_student_repr():
+    class Unprintable:
+        def __repr__(self):
+            raise AssertionError("repr should not run")
+
+    value = Unprintable()
+    snapshot = codejourney._snapshot_value(value)
+
+    assert snapshot == ObjectSnapshot("Unprintable")
+
+
+def test_max_steps_truncates_execution_at_the_configured_limit():
+    result = run_viz("count = 0\nwhile True:\n    count += 1\n", max_steps=5)
+
+    assert result.truncated is True
+    assert sum(event.event == "line" for event in result.events) == 5
+    assert result.error is None
+    assert all(
+        event.exception_type != "_StepLimitReached"
+        for event in result.events
+        if event.event == "exception"
+    )
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_max_steps_must_be_positive(value):
+    with pytest.raises(ValueError, match="positive"):
+        run_viz("x = 1", max_steps=value)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "2", None])
+def test_max_steps_must_be_an_integer(value):
+    with pytest.raises(TypeError, match="integer"):
+        run_viz("x = 1", max_steps=value)
+
+
+def test_code_str_must_be_a_string():
+    with pytest.raises(TypeError, match="code_str"):
+        run_viz(123)
+
+
+def test_syntax_error_is_returned_as_structured_data():
+    result = run_viz("if True\n    pass\n")
+
+    assert result.error is not None
+    assert result.error.type_name == "SyntaxError"
+    assert result.error.line_number == 1
+    assert result.events == ()
+
+
+def test_runtime_error_keeps_partial_trace():
+    result = run_viz("value = 1\nraise ValueError('bad input')\n")
+
+    assert result.error is not None
+    assert result.error.type_name == "ValueError"
+    assert "bad input" in result.error.message
+    assert any(event.line_number == 1 for event in result.events)
+    assert any(event.event == "exception" for event in result.events)
+
+
+def test_custom_exception_stringification_is_not_executed():
+    result = run_viz(
+        "class UnsafeError(Exception):\n"
+        "    def __str__(self):\n"
+        "        raise AssertionError('must not stringify')\n"
+        "raise UnsafeError('safe message')\n"
+    )
+
+    assert result.error is not None
+    assert result.error.type_name == "UnsafeError"
+    assert result.error.message == "safe message"
+
+
+def test_previous_trace_function_is_restored(monkeypatch):
+    previous_trace = lambda frame, event, arg: previous_trace
+    monkeypatch.setattr(sys, "gettrace", lambda: previous_trace)
+    installed = []
+    monkeypatch.setattr(sys, "settrace", lambda callback: installed.append(callback))
+
+    result = run_viz("answer = 1\n")
+
+    assert result.error is None
+    assert installed[0] is not previous_trace
+    assert installed[-1] is previous_trace
+
+
+def test_magic_registration_is_optional_and_registers_cell_magic(monkeypatch):
+    class FakeShell:
+        def __init__(self):
+            self.registration = None
+
+        def register_magic_function(self, function, magic_kind, magic_name):
+            self.registration = (function, magic_kind, magic_name)
+
+    shell = FakeShell()
+    monkeypatch.setattr("IPython.get_ipython", lambda: shell)
+    codejourney._register_pyviz_magic()
+
+    assert shell.registration == (codejourney.pyviz, "cell", "pyviz")
+
+
+def test_cell_magic_returns_the_structured_trace():
+    result = codejourney.pyviz("", "answer = 42")
+
+    assert isinstance(result, codejourney.TraceResult)
+    assert result.events[-1].after["answer"] == 42
+
+
+def test_ast_analysis_extracts_loop_metadata_and_known_iteration_count():
+    result = run_viz("total = 0\nfor value in range(2, 5):\n    total += value\n")
+
+    assert len(result.loops) == 1
+    loop = result.loops[0]
+    assert loop.kind == "for"
+    assert loop.line_number == 2
+    assert loop.total_iterations == 3
+    assert loop.header == "for value in range(2, 5)"
+
+
+def test_for_loop_iterations_have_boundaries_and_beginner_labels():
+    result = run_viz("total = 0\nfor value in [2, 4]:\n    total += value\n")
+    iterations = [
+        iteration
+        for event in result.events
+        for iteration in event.loop_iterations
+        if event.line_number == 3
+    ]
+    starts = [
+        boundary
+        for event in result.events
+        for boundary in event.loop_boundaries
+        if boundary.kind == "start"
+    ]
+    ends = [
+        boundary
+        for event in result.events
+        for boundary in event.loop_boundaries
+        if boundary.kind == "end"
+    ]
+
+    assert [item.iteration_index for item in iterations] == [0, 1]
+    assert [item.label for item in iterations] == ["Iteration 1 of 2", "Iteration 2 of 2"]
+    assert [boundary.iteration_index for boundary in starts] == [0, 1]
+    assert [boundary.iteration_index for boundary in ends] == [0, 1]
+    assert all(
+        iteration.iteration_index in (0, 1)
+        for event in result.events
+        for iteration in event.loop_iterations
+    )
+
+
+def test_while_loop_tracks_unknown_total_and_condition_outcomes():
+    result = run_viz("count = 0\nwhile count < 2:\n    count += 1\n")
+
+    loop = result.loops[0]
+    assert loop.kind == "while"
+    assert loop.total_iterations is None
+    previews = [
+        event.condition_preview
+        for event in result.events
+        if event.condition_preview is not None
+    ]
+    assert [preview.result for preview in previews] == [True, True, False]
+    assert previews[0].preview == "count < 2 -> 0 < 2 -> True"
+    assert previews[-1].preview == "count < 2 -> 2 < 2 -> False"
+
+
+def test_if_and_elif_conditions_are_extracted_and_previewed():
+    result = run_viz(
+        "number = 3\n"
+        "if number < 0:\n"
+        "    label = 'negative'\n"
+        "elif number > 2:\n"
+        "    label = 'large'\n"
+        "else:\n"
+        "    label = 'small'\n"
+    )
+    previews = [
+        event.condition_preview
+        for event in result.events
+        if event.condition_preview is not None
+    ]
+
+    assert [preview.expression for preview in previews] == ["number < 0", "number > 2"]
+    assert [preview.result for preview in previews] == [False, True]
+    assert previews[1].preview == "number > 2 -> 3 > 2 -> True"
+
+
+def test_condition_preview_never_calls_condition_function_again():
+    result = run_viz(
+        "calls = 0\n"
+        "def check():\n"
+        "    global calls\n"
+        "    calls += 1\n"
+        "    return True\n"
+        "if check():\n"
+        "    answer = 1\n"
+    )
+
+    assert result.events[-1].after["calls"] == 1
+    condition = next(event.condition_preview for event in result.events if event.condition_preview)
+    assert condition.result is True
+    assert "value unavailable" in condition.preview
+
+
+def test_raised_condition_is_not_misreported_as_false():
+    result = run_viz(
+        "def check():\n"
+        "    raise RuntimeError('condition failed')\n"
+        "if check():\n"
+        "    answer = 1\n"
+    )
+    condition = next(event.condition_preview for event in result.events if event.condition_preview)
+
+    assert result.error is not None
+    assert condition.result is None
+    assert condition.preview == "check() (value unavailable)"
+
+
+def test_variable_diffs_identify_added_modified_and_removed_variables():
+    result = run_viz("value = 1\nvalue = 2\ndel value\n")
+    diffs = [
+        diff
+        for event in result.events
+        for diff in event.variable_diffs
+        if diff.name == "value"
+    ]
+
+    assert [diff.change for diff in diffs] == ["added", "modified", "removed"]
+
+
+def test_list_mutation_diff_reports_affected_indices():
+    result = run_viz("items = [1, 2]\nitems[1] = 9\n")
+    diffs = [
+        diff
+        for event in result.events
+        for diff in event.variable_diffs
+        if diff.name == "items" and diff.list_indices
+    ]
+
+    assert diffs[-1].list_indices == (1,)
+
+
+def test_list_append_reports_new_index():
+    result = run_viz("items = [1]\nitems.append(2)\n")
+    diffs = [
+        diff
+        for event in result.events
+        for diff in event.variable_diffs
+        if diff.name == "items" and diff.list_indices
+    ]
+
+    assert diffs[-1].list_indices == (1,)
+
+
+def test_dictionary_mutation_diff_reports_affected_keys():
+    result = run_viz("data = {'a': 1}\ndata['b'] = 2\ndata['a'] = 3\n")
+    diffs = [
+        diff
+        for event in result.events
+        for diff in event.variable_diffs
+        if diff.name == "data" and diff.dictionary_keys
+    ]
+
+    assert diffs[0].dictionary_keys == ("b",)
+    assert diffs[1].dictionary_keys == ("a",)
+
+
+def test_aliases_are_detected_by_shared_identity():
+    result = run_viz("first = []\nsecond = first\n")
+    aliases = [alias for event in result.events for alias in event.aliases]
+
+    assert any(alias.name == "second" and alias.linked_to == "first" for alias in aliases)
+    assert any(alias.label == "Linked to first" for alias in aliases)
+
+
+def test_equal_but_separate_lists_are_not_reported_as_aliases():
+    result = run_viz("first = [1]\nsecond = [1]\n")
+
+    assert all(not event.aliases for event in result.events)
+
+
+def test_list_mutation_during_iteration_warning_is_reported():
+    result = run_viz("items = [1]\nfor item in items:\n    items.append(item)\n", max_steps=8)
+
+    warning = next(
+        warning
+        for warning in result.warnings
+        if warning.code == "list-mutated-during-iteration"
+    )
+    assert warning.line_number == 3
+
+
+def test_deleting_list_items_while_iterating_is_warned():
+    result = run_viz(
+        "items = [1, 2]\n"
+        "for index, item in enumerate(items):\n"
+        "    del items[index]\n",
+        max_steps=12,
+    )
+
+    assert any(
+        warning.code == "list-mutated-during-iteration"
+        for warning in result.warnings
+    )
+
+
+def test_break_and_return_on_first_iteration_warnings_are_observed():
+    break_result = run_viz("for item in [1, 2]:\n    break\n")
+    return_result = run_viz(
+        "def stop():\n"
+        "    for item in [1, 2]:\n"
+        "        return item\n"
+        "stop()\n"
+    )
+
+    assert any(warning.code == "break-first-iteration" for warning in break_result.warnings)
+    assert any(warning.code == "return-first-iteration" for warning in return_result.warnings)
+
+
+def test_builtin_shadowing_warning_is_detected():
+    result = run_viz("list = [1, 2]\n")
+
+    warning = next(
+        warning for warning in result.warnings if warning.code == "builtin-shadowing"
+    )
+    assert "'list' shadows a Python built-in" in warning.message
+
+
+def test_import_alias_can_shadow_a_builtin():
+    result = run_viz("from math import ceil as list\n")
+
+    assert any(warning.code == "builtin-shadowing" for warning in result.warnings)
+
+
+def test_nested_loops_keep_iteration_context_for_each_loop():
+    result = run_viz(
+        "total = 0\n"
+        "for outer in [1, 2]:\n"
+        "    for inner in [3, 4]:\n"
+        "        total += outer * inner\n"
+    )
+    body_event = next(event for event in result.events if event.line_number == 4)
+
+    assert len(body_event.loop_iterations) == 2
+    assert [item.iteration_index for item in body_event.loop_iterations] == [0, 0]
+    assert body_event.loop_iterations[0].loop_id != body_event.loop_iterations[1].loop_id
+    inner_groups = {
+        event.loop_iterations[-1].group_id
+        for event in result.events
+        if event.line_number == 4 and len(event.loop_iterations) == 2
+    }
+    assert len(inner_groups) == 2
+
+
+def test_html_visualizer_uses_notebook_safe_controls_and_escapes_source():
+    result = run_viz(
+        "value = '<script>alert(1)</script>'\n"
+        "items = []\n"
+        "alias = items\n"
+        "for i in [1, 2]:\n"
+        "    value = i\n"
+    )
+    rendered = result._repr_html_()
+
+    assert 'type="radio"' in rendered
+    assert 'role="group" aria-label="Execution timeline"' in rendered
+    assert 'class="cj-tick" role="button"' in rendered
+    assert ".cj-controls[data-step-controls='0']{display:flex}" in rendered
+    assert "Jump to Next Change" in rendered
+    assert "Prev Iteration" in rendered
+    assert "Next Iteration" in rendered
+    assert "Iteration" in rendered
+    assert "What changed?" in rendered
+    assert "cj-current" in rendered
+    assert "Linked to items" in rendered
+    assert "<script>alert(1)</script>" not in rendered
+    assert "&lt;script&gt;" in rendered
+    assert "<script>" not in rendered.lower()
+    assert "addEventListener" not in rendered
+    assert "application/javascript" not in rendered
+
+
+def test_html_escapes_warning_and_error_text():
+    result = run_viz("raise ValueError('<img src=x onerror=alert(1)>')\n")
+    rendered = result._repr_html_()
+
+    assert "&lt;img src=x onerror=alert(1)&gt;" in rendered
+    assert "<img src=x onerror=alert(1)>" not in rendered
+    assert "Educational trace, not a debugger" in rendered
+
+
+def test_empty_source_still_renders_controls_and_empty_state():
+    rendered = run_viz("")._repr_html_()
+
+    assert "Timeline" not in rendered
+    assert "No execution steps captured." in rendered
+
+
+def test_html_has_variables_and_object_boxes_for_python_objects():
+    result = run_viz("items = [1, 2]\nalias = items\n")
+    rendered = result._repr_html_()
+
+    pointer = re.search(
+        r'<a class="cj-pointer" href="#([^"]+)"[^>]*>&rarr; object 1</a>',
+        rendered,
+    )
+    object_box = re.search(r'<article class="cj-object" id="([^"]+)"', rendered)
+    assert pointer is not None
+    assert object_box is not None
+    assert pointer.group(1) == object_box.group(1)
+    assert "items" in rendered
+    assert "alias" in rendered
+    assert "[\n  1,\n  2\n]" in rendered

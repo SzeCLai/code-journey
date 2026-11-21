@@ -1,1 +1,45 @@
-# cs1302-group09-project
+# CodeJourney
+
+CodeJourney is an educational Python execution visualizer for Jupyter
+Notebooks. It helps beginner programmers understand execution through
+source-line highlighting, variable changes, loop-aware navigation, and
+educational warnings. It is not a full debugger or a security sandbox.
+
+CodeJourney captures source lines, safe variable snapshots, variable diffs,
+collection changes, aliases, loop iterations, condition previews, and
+educational warnings. `TraceResult` exposes structured Python data and renders
+a self-contained interactive HTML view in Jupyter.
+
+```python
+from codejourney import run_viz
+
+trace = run_viz("x = 1\nx += 1")
+trace.events
+trace._repr_html_()
+```
+
+Importing `codejourney` in an IPython/Jupyter session registers the `%%pyviz`
+cell magic automatically:
+
+```python
+%%pyviz
+total = 0
+for number in [1, 2, 3]:
+    total += number
+```
+
+`run_viz` accepts a `max_steps` limit (default: `500`):
+
+```python
+trace = run_viz("count = 0\nwhile count < 3:\n    count += 1", max_steps=100)
+trace.warnings
+```
+
+Execution is **not sandboxed**: analyzed code runs with the Python process's
+normal permissions and may perform I/O or access the network. The step limit
+bounds traced Python lines only; it is not a timeout or security boundary.
+
+CodeJourney is an educational visualizer, not a full debugger. It does not
+provide breakpoints or control a live execution session.
+
+The project specification and roadmap are in [SPEC.md](./SPEC.md).
