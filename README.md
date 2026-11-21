@@ -1,25 +1,130 @@
 # CodeJourney
 
 CodeJourney is an educational Python execution visualizer for Jupyter
-Notebooks. It helps beginner programmers understand execution through
-source-line highlighting, variable changes, loop-aware navigation, and
-educational warnings. It is not a full debugger or a security sandbox.
+notebooks. It helps beginners inspect source-line execution, variable changes,
+collections, aliases, loop iterations, condition previews, and recognizable
+learning hazards.
 
-CodeJourney captures source lines, safe variable snapshots, variable diffs,
-collection changes, aliases, loop iterations, condition previews, and
-educational warnings. `TraceResult` exposes structured Python data and renders
-a self-contained interactive HTML view in Jupyter.
+## Motivation
+
+Beginners often have to infer program behavior by repeatedly comparing source
+code with the current values of variables. Traditional line-by-line traces can
+also lose the structure of loops. CodeJourney presents captured execution steps
+as a navigable notebook view, with variable diffs and loop-aware landmarks
+intended to make common patterns easier to inspect.
+
+CodeJourney is a learning aid, not a replacement for a debugger or a complete
+model of Python execution.
+
+## Verified features
+
+The following features are present in the current implementation and reviewed
+against the repository source:
+
+- `run_viz(code_str, *, max_steps=500)` returns structured trace data.
+- `%%pyviz` runs a Python cell and displays the resulting trace in IPython or
+  Jupyter.
+- Captured trace events include source lines, variable snapshots, variable
+  diffs, collection mutations, and runtime or syntax errors.
+- Supported loop metadata includes `for`, `while`, nested loops, iteration
+  boundaries, and known totals when they can be established from source.
+- Safe condition previews can show captured substitutions and results.
+- Shared object identity is rendered as alias links rather than inferred from
+  equal values.
+- The HTML view is CSS-only and is intended to work in notebook renderers that
+  restrict JavaScript.
+- The implementation includes educational prompts for supported, recognizable
+  cases such as list mutation during iteration, first-iteration `break` or
+  `return`, and assignment to a Python built-in name.
+
+These source-level and unit-test features have not been marked manually
+verified unless they are personally confirmed by the repository maintainer.
+Use [the manual test checklist](docs/manual-test-checklist.md) for notebook and
+fresh-install verification.
+
+## Requirements
+
+- Python 3.9 or newer.
+- Jupyter/IPython for notebook display and `%%pyviz`.
+- The `run_viz` API can be used in Python environments with or without
+  IPython.
+
+## Installation
+
+### From PyPI
+
+> **Pending publication:** PyPI installation is not yet available. Do not use
+> this package from PyPI until publication is confirmed.
+
+Once the package has been published, the expected command will be:
+
+```bash
+python -m pip install codejourney
+```
+
+Replace or remove the pending notice when an actual PyPI release is confirmed.
+
+### Development installation
+
+From the repository root:
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+# source .venv/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install -e .
+python -m pip install pytest
+```
+
+Run the existing test suite with:
+
+```bash
+python -m pytest
+```
+
+The test command verifies repository automation, but it does not replace
+personal review of the interactive notebook UI.
+
+## Quick start: `run_viz`
 
 ```python
 from codejourney import run_viz
 
-trace = run_viz("x = 1\nx += 1")
+trace = run_viz(
+    "total = 0\n"
+    "for number in [1, 2, 3]:\n"
+    "    total += number\n",
+    max_steps=100,
+)
+
 trace.events
+trace.error
+trace.warnings
 trace._repr_html_()
 ```
 
-Importing `codejourney` in an IPython/Jupyter session registers the `%%pyviz`
-cell magic automatically:
+In a Jupyter notebook, displaying `trace` may render the interactive HTML:
+
+```python
+trace
+```
+
+`max_steps` must be a positive integer and defaults to `500`.
+
+## Quick start: `%%pyviz`
+
+Import `codejourney` in an active IPython/Jupyter session to register the
+`%%pyviz` cell magic automatically:
+
+```python
+import codejourney
+```
+
+Then run a source cell:
 
 ```python
 %%pyviz
@@ -28,18 +133,117 @@ for number in [1, 2, 3]:
     total += number
 ```
 
-`run_viz` accepts a `max_steps` limit (default: `500`):
+The magic returns a `TraceResult`; outside a live IPython environment, use
+`run_viz` instead.
 
-```python
-trace = run_viz("count = 0\nwhile count < 3:\n    count += 1", max_steps=100)
-trace.warnings
-```
+## Visualization controls
 
-Execution is **not sandboxed**: analyzed code runs with the Python process's
-normal permissions and may perform I/O or access the network. The step limit
-bounds traced Python lines only; it is not a timeout or security boundary.
+The notebook view provides the following controls:
 
-CodeJourney is an educational visualizer, not a full debugger. It does not
-provide breakpoints or control a live execution session.
+- **Timeline ticks** — select a numbered execution step directly.
+- **Prev** — move to the previous captured execution step.
+- **Next** — move to the next captured execution step.
+- **Prev Iteration** — move to the previous loop-start boundary.
+- **Next Iteration** — move to the next loop-start boundary.
+- **Jump to Next Change** — move to the next later step that reports a variable
+  diff.
+- **Step counter** — show the selected step and total number of captured steps.
+- **Source panel** — highlight the source line associated with the selected
+  execution state.
+- **Variables** — show variable names and scalar or collection values captured
+  at that state.
+- **Objects** — show object or collection representations and links from
+  object-valued variables.
+- **What changed?** — show added, removed, or modified variables and, when
+  available, affected list indices or dictionary keys.
+- **Learning notes** — show supported educational warnings, the execution
+  error, and trace-limit truncation notices.
+- **Iteration badge** — show loop iteration context when available.
 
-The project specification and roadmap are in [SPEC.md](./SPEC.md).
+Controls disabled for the current step or state are shown as unavailable.
+
+## Supported scope
+
+CodeJourney can inspect and visualize:
+
+- Python source supplied as a string to `run_viz`, or a complete cell passed to
+  `%%pyviz`.
+- Supported built-in scalar values and nested built-in collections.
+- Observed `line`, `return`, and `exception` trace events.
+- `for` and `while` loop structure and source-expressed condition metadata.
+- Syntax and runtime errors, with partial results where execution already
+  produced trace events.
+
+Support is deliberately bounded. CodeJourney does not trace every construct,
+native operation, extension call, generator, or third-party library behavior
+in full. It does not promise complete support for every Python program or every
+possible exception.
+
+## Security warning
+
+**Executed code is not sandboxed.** `run_viz` and `%%pyviz` execute submitted
+code with the permissions of the current Python process. Analyzed code can
+perform file or network I/O, invoke native code, consume resources, or block.
+Only run code you trust and review it before execution.
+
+`max_steps` limits traced Python line events. It is not a timeout and is not a
+security boundary. Execution can continue beyond the trace limit for behavior
+that does not produce further counted events.
+
+## Limitations
+
+- This is an educational execution trace, not a full debugger.
+- It does not provide breakpoints or control of a live process.
+- Captured values and object displays are snapshots, not live variable references.
+- Unsupported values receive safe type-oriented descriptions rather than
+  arbitrary representations.
+- Aliases are based on observed shared object identity.
+- Condition previews are not re-evaluated for display.
+- Loop totals may be unknown for dynamic iterables or `while` loops.
+- A reached step limit produces a partial visualization and warning.
+- Syntax and runtime errors are represented alongside available partial data;
+  they should not be interpreted as successful completion.
+- Snapshot depth and trace behavior may omit or summarize deeply nested or
+  uncommon values.
+- Learning warnings are prompts, not proofs of an error or defect.
+
+## Comparison with existing execution visualizers
+
+CodeJourney overlaps with existing execution visualizers, including browser
+and notebook tools such as Python Tutor, but has a narrower educational focus.
+The current implementation emphasizes loop iteration landmarks, variable
+diffs, collection mutation details, aliases, condition previews, and
+recognizable beginner warnings.
+
+Python Tutor and other established tools may provide broader compatibility,
+longer-lived ecosystems, or additional debugger-style features. CodeJourney
+does not claim to be better than those tools, the first execution visualizer,
+or a general replacement for an IDE debugger.
+
+Choose the tool appropriate to the program and learning task. CodeJourney is
+most useful for short, reviewable Python examples in Jupyter.
+
+## Team
+
+- **Member 1:** [Name / responsibility placeholder]
+- **Member 2:** [Name / responsibility placeholder]
+- **Member 3:** [Name / responsibility placeholder]
+
+## License
+
+Repository metadata currently declares **MIT**. A separate license file or
+official release wording has not been provided here as a completed claim:
+**[License text and link placeholder]**.
+
+## Version
+
+The current project metadata declares version **0.1.0**. Confirm this value
+before release: **[Release/version placeholder]**.
+
+## Project links
+
+- GitHub: **[Repository URL placeholder]**
+- PyPI: **[Package URL placeholder — pending publication]**
+- Documentation: **[External documentation URL placeholder — pending creation]**
+
+The project specification is available in [SPEC.md](SPEC.md).
