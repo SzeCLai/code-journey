@@ -52,17 +52,12 @@ fresh-install verification.
 ## Installation
 
 ### From PyPI
-
-> **Pending publication:** PyPI installation is not yet available. Do not use
-> this package from PyPI until publication is confirmed.
-
-Once the package has been published, the expected command will be:
-
+CodeJourney is published on PyPI
 ```bash
 python -m pip install codejourney
 ```
-
-Replace or remove the pending notice when an actual PyPI release is confirmed.
+PyPI package: https://pypi.org/project/codejourney/ 
+After installation, restart the Jupyter kernel before importing the package
 
 ### Development installation
 
