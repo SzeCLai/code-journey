@@ -10,6 +10,12 @@ collection changes, aliases, loop iterations, condition previews, and
 educational warnings. `TraceResult` exposes structured Python data and renders
 a self-contained interactive HTML view in Jupyter.
 
+Install the published package from PyPI with:
+
+```shell
+pip install codejourney
+```
+
 ```python
 from codejourney import run_viz
 
