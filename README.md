@@ -238,13 +238,12 @@ official release wording has not been provided here as a completed claim:
 
 ## Version
 
-The current project metadata declares version **0.1.0**. Confirm this value
-before release: **[Release/version placeholder]**.
+Current release: 0.1.0
 
 ## Project links
 
-- GitHub: **[Repository URL placeholder]**
-- PyPI: **[Package URL placeholder — pending publication]**
-- Documentation: **[External documentation URL placeholder — pending creation]**
+- GitHub: https://github.com/ercch/code-journey
+- PyPI: https://pypi.org/project/codejourney/
+- Documentation: this README and SPEC.md
 
 The project specification is available in [SPEC.md](SPEC.md).
