@@ -3,37 +3,132 @@
 from __future__ import annotations
 
 import html
-import json
-import math
 import uuid
-from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, Optional
 
 from . import CollectionSnapshot, ObjectSnapshot, TraceEvent, TraceResult
 
 
-def _json_value(value: Any) -> Any:
-    if value is None or type(value) in (bool, int, str):
-        return value
-    if type(value) is float:
-        return value if math.isfinite(value) else str(value)
-    if type(value) is bytes:
-        return {"type": "bytes", "hex": value.hex()}
-    if type(value) in (list, tuple):
-        return [_json_value(item) for item in value]
+def _value_text(value: Any, depth: int = 0) -> str:
     if isinstance(value, ObjectSnapshot):
-        return {"type": value.type_name}
+        return f"{value.display_name}()" if value.display_name else value.type_name
     if isinstance(value, CollectionSnapshot):
-        return {"type": value.type_name, "items": _json_value(value.items)}
-    if is_dataclass(value):
-        return _json_value(asdict(value))
+        if value.type_name == "dict":
+            entries = value.items
+            opening, closing = "{", "}"
+            return _mapping_text(entries, opening, closing, depth)
+        if value.type_name in {"set", "frozenset"}:
+            if not value.items:
+                return "set()" if value.type_name == "set" else "frozenset()"
+            body = _sequence_text(value.items, "{", "}", depth, indexed=False)
+            return body if value.type_name == "set" else f"frozenset({body})"
+        return value.type_name
+    if type(value) in (list, tuple):
+        opening, closing = ("[", "]") if type(value) is list else ("(", ")")
+        if not value and type(value) is tuple:
+            return "()"
+        if not value:
+            return "[]"
+        return _sequence_text(value, opening, closing, depth, indexed=True)
     if type(value) is dict:
-        return {str(key): _json_value(item) for key, item in value.items()}
-    return {"type": type(value).__name__}
+        return _mapping_text(tuple(value.items()), "{", "}", depth)
+    if type(value) is str:
+        return repr(value)
+    return repr(value)
 
 
-def _value_text(value: Any) -> str:
-    return json.dumps(_json_value(value), ensure_ascii=True, indent=2)
+def _sequence_text(
+    items: Any,
+    opening: str,
+    closing: str,
+    depth: int,
+    indexed: bool,
+) -> str:
+    if not items:
+        return opening + closing
+    indent = "  " * (depth + 1)
+    lines = [opening]
+    for index, item in enumerate(items):
+        rendered = _value_text(item, depth + 1).splitlines()
+        label = f"{index} -> " if indexed else ""
+        lines.append(indent + label + rendered[0])
+        lines.extend(rendered[1:])
+    lines.append("  " * depth + closing)
+    return "\n".join(lines)
+
+
+def _mapping_text(items: Any, opening: str, closing: str, depth: int) -> str:
+    if not items:
+        return opening + closing
+    indent = "  " * (depth + 1)
+    lines = [opening]
+    for key, value in items:
+        rendered = _value_text(value, depth + 1).splitlines()
+        lines.append(indent + _value_text(key, depth + 1).splitlines()[0] + " -> " + rendered[0])
+        lines.extend(rendered[1:])
+    lines.append("  " * depth + closing)
+    return "\n".join(lines)
+
+
+def _object_type(value: Any) -> str:
+    if isinstance(value, (CollectionSnapshot, ObjectSnapshot)):
+        return value.type_name
+    return type(value).__name__
+
+
+def _collection_table(value: Any) -> Optional[str]:
+    if type(value) in (list, tuple):
+        headings = ("Index", "Value")
+        rows = tuple(enumerate(value))
+        has_row_heading = True
+    elif type(value) is dict:
+        headings = ("Key", "Value")
+        rows = tuple(value.items())
+        has_row_heading = True
+    elif type(value) in (set, frozenset):
+        headings = ("Value",)
+        rows = tuple((item,) for item in value)
+        has_row_heading = False
+    elif isinstance(value, CollectionSnapshot) and value.type_name == "dict":
+        headings = ("Key", "Value")
+        rows = value.items
+        has_row_heading = True
+    elif isinstance(value, CollectionSnapshot) and value.type_name in {"set", "frozenset"}:
+        headings = ("Value",)
+        rows = tuple((item,) for item in value.items)
+        has_row_heading = False
+    else:
+        return None
+
+    header_html = "".join(
+        f'<th scope="col">{heading}</th>' for heading in headings
+    )
+    row_html = []
+    for row in rows:
+        cells = (
+            f'<th scope="row">{html.escape(_value_text(row[0]))}</th>'
+            if has_row_heading
+            else ""
+        )
+        values = row[1:] if has_row_heading else row
+        cells += "".join(
+            f"<td>{_object_value_html(item)}</td>" for item in values
+        )
+        row_html.append(f"<tr>{cells}</tr>")
+    return (
+        '<table class="cj-object-table"><thead><tr>'
+        + header_html
+        + "</tr></thead><tbody>"
+        + "".join(row_html)
+        + "</tbody></table>"
+    )
+
+
+def _object_value_html(value: Any) -> str:
+    nested_table = _collection_table(value)
+    if nested_table is not None:
+        return nested_table
+    return html.escape(_value_text(value))
 
 
 def _is_object(value: Any) -> bool:
@@ -98,10 +193,19 @@ def _variable_objects(event: TraceEvent, scope: str) -> tuple[str, str]:
     for canonical, value in object_values.items():
         object_id = object_ids[canonical]
         object_number = object_id.rsplit("-object-", 1)[-1]
+        table_html = _collection_table(value)
+        contents_html = (
+            table_html
+            if table_html is not None
+            else f"<pre>{html.escape(_value_text(value))}</pre>"
+        )
         objects_html.append(
             f'<article class="cj-object" id="{object_id}">'
-            f'<h4>Object {object_number}</h4>'
-            f"<pre>{html.escape(_value_text(value))}</pre>"
+            '<header class="cj-object-heading">'
+            f"<h4>Object {object_number}</h4>"
+            f'<span class="cj-object-type">{html.escape(_object_type(value))}</span>'
+            "</header>"
+            f"{contents_html}"
             "</article>"
         )
     if not objects_html:
@@ -426,7 +530,7 @@ def render_html(result: TraceResult) -> str:
         )
         rules.append(
             f"#{selector_id}:checked ~ .cj-timeline label[for='{selector_id}']"
-            "{background:#315fa8;color:#fff}"
+            "{background:#315fa8 !important;color:#fff !important;border-color:#315fa8 !important}"
         )
 
     if not events:
@@ -456,14 +560,14 @@ def render_html(result: TraceResult) -> str:
 
     return f"""<div class="codejourney {scope}">
 <style>
-.codejourney {{ font: 14px/1.45 system-ui, sans-serif; color: #172033; background: #fff; border: 1px solid #d5dbe6; border-radius: 10px; padding: 14px; }}
+.codejourney {{ font: 14px/1.45 system-ui, sans-serif; color: #172033; background: #fff; color-scheme: light; border: 1px solid #d5dbe6; border-radius: 10px; padding: 14px; }}
 .codejourney * {{ box-sizing: border-box; }}
 .cj-selector {{ position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }}
-.cj-output-card {{ margin: 0 0 12px; padding: 10px 12px; border: 1px solid #334155; border-radius: 8px; background: #172033; color: #f8fafc; color-scheme: dark; }}
-.cj-output-card h3 {{ margin: 0 0 8px; color: #fff; font-size: 14px; }}
+.cj-output-card {{ margin: 0 0 12px; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #172033; color-scheme: light; }}
+.cj-output-card h3 {{ margin: 0 0 8px; color: #172033; font-size: 14px; }}
 .cj-output-state {{ display: none; }}
-.cj-output-card pre {{ max-height: 260px; overflow: auto; margin: 0; padding: 9px 10px; border-radius: 5px; background: #0b1220 !important; color: #f8fafc !important; white-space: pre-wrap; overflow-wrap: anywhere; }}
-.cj-output-empty {{ margin: 0; color: #dbeafe; }}
+.cj-output-card pre {{ max-height: 260px; overflow: auto; margin: 0; padding: 9px 10px; border: 1px solid #dbe2ea; border-radius: 5px; background: #f8fafc !important; color: #172033 !important; white-space: pre-wrap; overflow-wrap: anywhere; }}
+.cj-output-empty {{ margin: 0; color: #475569; }}
 .cj-controls {{ display: none; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }}
 .cj-button {{ border: 1px solid #aeb8c8; background: #f7f9fc; border-radius: 6px; padding: 6px 10px; cursor: pointer; color: inherit; }}
 .cj-button:hover {{ background: #e9eff8; }}
@@ -560,13 +664,53 @@ def render_html(result: TraceResult) -> str:
 .cj-alias {{ color: #657187; font-size: 12px; }}
 .cj-scalar {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
 .cj-object {{ border: 1px solid #bdc9da; border-radius: 7px; padding: 8px 10px; background: #fff; margin: 7px 0 0 18px; scroll-margin: 8px; }}
-.cj-object h4 {{ font-size: 12px; color: #53647c; margin: 0 0 4px; }}
+.cj-object-heading {{ display: flex; align-items: center; gap: 7px; margin: 0 0 7px; }}
+.cj-object h4 {{ font-size: 12px; color: #53647c; margin: 0; }}
+.cj-object-type {{ display: inline-block; border: 1px solid #cbd5e1; border-radius: 999px; padding: 1px 7px; background: #f1f5f9; color: #334155; font-size: 11px; }}
 .cj-object pre {{ margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }}
+.cj-object-table {{ width: 100%; border-collapse: collapse; table-layout: fixed; background: #fff; color: #172033; }}
+.cj-object-table th, .cj-object-table td {{ border: 1px solid #cbd5e1; padding: 5px 7px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
+.cj-object-table thead th {{ background: #f1f5f9; color: #334155; font-weight: 650; }}
+.cj-object-table tbody th {{ width: 1%; white-space: nowrap; background: #f8fafc; color: #334155; font-weight: 550; }}
+.cj-object-table td {{ color: #172033; }}
 .cj-diff {{ border-left: 3px solid #6688c7; background: #f7f9fd; padding: 7px 9px; margin: 7px 0; border-radius: 4px; overflow-wrap: anywhere; }}
 .cj-diff pre {{ margin: 4px 0 0; white-space: pre-wrap; }}
 .cj-warning {{ color: #684800; background: #fff6d8; border-radius: 5px; padding: 6px 8px; margin: 5px 0; }}
 .cj-error {{ color: #8d2020; background: #fde8e8; border-radius: 5px; padding: 6px 8px; margin: 5px 0; }}
 .cj-muted, .cj-empty {{ color: #657187; font-size: 12px; }}
+.codejourney .cj-panel {{ background: #fff !important; color: #172033 !important; color-scheme: light; border-color: #d5dbe6 !important; }}
+.codejourney .cj-panel h3 {{ color: #172033 !important; }}
+.codejourney .cj-condition-card {{ background: #f8fafc !important; color: #172033 !important; color-scheme: light; border-color: #cbd5e1 !important; }}
+.codejourney .cj-condition-heading {{ color: #475569 !important; }}
+.codejourney .cj-condition-expression {{ color: #1e293b !important; }}
+.codejourney .cj-condition-preview {{ background: #e2e8f0 !important; color: #334155 !important; }}
+.codejourney .cj-condition-true {{ background: #dcfce7 !important; color: #166534 !important; }}
+.codejourney .cj-condition-false {{ background: #fee2e2 !important; color: #991b1b !important; }}
+.codejourney .cj-condition-unknown {{ background: #e2e8f0 !important; color: #475569 !important; }}
+.codejourney .cj-output-card {{ background: #fff !important; color: #172033 !important; border-color: #cbd5e1 !important; color-scheme: light; }}
+.codejourney .cj-output-card h3 {{ color: #172033 !important; }}
+.codejourney .cj-output-card pre {{ background: #f8fafc !important; color: #172033 !important; border: 1px solid #dbe2ea !important; color-scheme: light; }}
+.codejourney .cj-output-empty {{ color: #475569 !important; }}
+.codejourney .cj-badge {{ background: #e8efff !important; color: #172033 !important; }}
+.codejourney .cj-tick {{ background: #e8edf5 !important; color: #172033 !important; }}
+.codejourney .cj-variable {{ background: #edf4ff !important; color: #172033 !important; border: 1px solid #cfddf4 !important; color-scheme: light; }}
+.codejourney .cj-variable-name, .codejourney .cj-scalar {{ color: #172033 !important; }}
+.codejourney .cj-scalar {{ background: #f8fafc !important; border: 1px solid #dbe2ea !important; border-radius: 4px; padding: 2px 5px; color-scheme: light; }}
+.codejourney .cj-pointer {{ color: #315fa8 !important; }}
+.codejourney .cj-alias {{ color: #53647c !important; }}
+.codejourney .cj-object {{ background: #fff !important; color: #172033 !important; border: 1px solid #bdc9da !important; color-scheme: light; }}
+.codejourney .cj-object h4 {{ color: #334155 !important; }}
+.codejourney .cj-object pre {{ background: #fff !important; color: #172033 !important; color-scheme: light; }}
+.codejourney .cj-object-type {{ background: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; color: #334155 !important; color-scheme: light; }}
+.codejourney .cj-object-table {{ background: #fff !important; color: #172033 !important; color-scheme: light; }}
+.codejourney .cj-object-table th, .codejourney .cj-object-table td {{ border: 1px solid #cbd5e1 !important; color: #172033 !important; }}
+.codejourney .cj-object-table thead th {{ background: #f1f5f9 !important; color: #334155 !important; }}
+.codejourney .cj-object-table tbody th {{ background: #f8fafc !important; color: #334155 !important; }}
+.codejourney .cj-diff {{ background: #f7f9fd !important; color: #172033 !important; border: 1px solid #d5dbe6 !important; border-left: 3px solid #6688c7 !important; color-scheme: light; }}
+.codejourney .cj-diff pre {{ background: #f7f9fd !important; color: #172033 !important; color-scheme: light; }}
+.codejourney .cj-warning {{ background: #fff6d8 !important; color: #684800 !important; }}
+.codejourney .cj-error {{ background: #fde8e8 !important; color: #8d2020 !important; }}
+.codejourney .cj-empty, .codejourney .cj-muted {{ color: #53647c !important; }}
 @media (max-width: 700px) {{ .cj-layout {{ grid-template-columns: 1fr; }} }}
 {''.join(rules)}
 </style>

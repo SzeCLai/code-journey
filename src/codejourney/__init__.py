@@ -45,6 +45,7 @@ class ObjectSnapshot:
     """Safe type-only description of a value not inspected by CodeJourney."""
 
     type_name: str
+    display_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -235,7 +236,10 @@ def _snapshot_value(
         finally:
             active_ids.remove(value_id)
 
-    return ObjectSnapshot(_type_name(value))
+    display_name = None
+    if value_type is types.BuiltinFunctionType:
+        display_name = value_type.__getattribute__(value, "__name__")
+    return ObjectSnapshot(_type_name(value), display_name)
 
 
 def _snapshot_locals(local_values: Dict[str, Any]) -> Dict[str, Any]:

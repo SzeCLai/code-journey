@@ -1,3 +1,4 @@
+import html
 import re
 import sys
 
@@ -181,8 +182,9 @@ def test_cell_magic_captures_stepwise_stdout_in_top_output_card(capsys):
     assert rendered.index(output_card) < rendered.index('<div class="cj-controls"')
     assert "class=\"cj-output-state\" data-output-index=\"0\"" in rendered
     assert "first\nsecond\n" in rendered
-    assert "background: #172033" in rendered
-    assert "color: #f8fafc" in rendered
+    assert ".codejourney .cj-output-card" in rendered
+    assert "background: #fff !important; color: #172033 !important" in rendered
+    assert "background: #f8fafc !important; color: #172033 !important" in rendered
     assert result.events[-1].output == "first\nsecond\n"
     assert any(event.output == "first\n" for event in result.events)
 
@@ -222,10 +224,22 @@ def test_timeline_marks_final_state_as_end_and_keeps_navigation():
 def test_visualizer_initializes_at_step_one():
     rendered = run_viz("first = 1\nsecond = 2\n")._repr_html_()
     selectors = re.findall(r'<input class="cj-selector"[^>]*>', rendered)
+    ticks = re.findall(
+        r'<label class="cj-tick" role="button" for="([^"]+)"[^>]*>(.*?)</label>',
+        rendered,
+    )
 
     assert len(selectors) > 1
     assert " checked>" in selectors[0]
     assert all(" checked>" not in selector for selector in selectors[1:])
+    assert ticks[0][1] == "1"
+    assert ticks[-1][1] == "END"
+    for selector_id, _ in (ticks[0], ticks[-1]):
+        assert (
+            f"#{selector_id}:checked ~ .cj-timeline label[for='{selector_id}']"
+            "{background:#315fa8 !important;color:#fff !important;"
+            "border-color:#315fa8 !important}"
+        ) in rendered
 
 
 def test_ast_analysis_extracts_loop_metadata_and_known_iteration_count():
@@ -625,7 +639,91 @@ def test_html_has_variables_and_object_boxes_for_python_objects():
     assert pointer.group(1) == object_box.group(1)
     assert "items" in rendered
     assert "alias" in rendered
-    assert "[\n  1,\n  2\n]" in rendered
+    assert '<span class="cj-object-type">list</span>' in rendered
+    assert '<th scope="col">Index</th><th scope="col">Value</th>' in rendered
+    assert '<th scope="row">0</th><td>1</td>' in rendered
+    assert '<th scope="row">1</th><td>2</td>' in rendered
+
+
+def test_list_dictionary_and_set_objects_render_as_typed_tables():
+    rendered = html.unescape(
+        run_viz(
+            "items = [1, print]\n"
+            "data = {'a': 1, 'b': 2}\n"
+            "unique = {8, 9}\n"
+        )._repr_html_()
+    )
+    cards = re.findall(
+        r'<article class="cj-object" id="[^"]+">(.*?)</article>',
+        rendered,
+        re.DOTALL,
+    )
+    list_card = next(card for card in cards if 'cj-object-type">list<' in card)
+    dict_card = next(card for card in cards if 'cj-object-type">dict<' in card)
+    set_card = next(card for card in cards if 'cj-object-type">set<' in card)
+
+    assert '<h4>Object 1</h4><span class="cj-object-type">list</span>' in list_card
+    assert '<th scope="col">Index</th><th scope="col">Value</th>' in list_card
+    assert '<th scope="row">0</th><td>1</td>' in list_card
+    assert '<th scope="row">1</th><td>print()</td>' in list_card
+    assert '<th scope="col">Key</th><th scope="col">Value</th>' in dict_card
+    assert "<th scope=\"row\">'a'</th><td>1</td>" in dict_card
+    assert "<th scope=\"row\">'b'</th><td>2</td>" in dict_card
+    assert '<th scope="col">Value</th>' in set_card
+    assert "<td>8</td>" in set_card
+    assert "<td>9</td>" in set_card
+    assert "Index" not in set_card
+    assert not any(bracket in set_card for bracket in "{}[]")
+    assert not any(bracket in list_card for bracket in "[]")
+    assert not any(bracket in dict_card for bracket in "{}")
+
+
+def test_visualizer_sections_keep_light_surfaces_and_dark_text():
+    rendered = run_viz("answer = 42\n")._repr_html_()
+
+    for selector in (
+        ".codejourney .cj-panel",
+        ".codejourney .cj-output-card",
+        ".codejourney .cj-variable",
+        ".codejourney .cj-object",
+        ".codejourney .cj-diff",
+        ".codejourney .cj-condition-card",
+    ):
+        assert selector in rendered
+    assert "color-scheme: light" in rendered
+    assert "background: #172033" not in rendered
+    assert "background: #0b1220" not in rendered
+    assert ".codejourney .cj-scalar" in rendered
+    assert ".codejourney .cj-warning" in rendered
+    assert ".codejourney .cj-error" in rendered
+
+
+def test_collection_values_render_vertically_with_type_appropriate_labels():
+    rendered = run_viz(
+        "items = [1, 2, 3, 14, print]\n"
+        "unique = {8, 9}\n"
+        "data = {'a': 1, 'b': 2}\n"
+        "items.append(15)\n"
+        "unique.add(10)\n"
+        "data['c'] = 3\n"
+    )._repr_html_()
+    formatted = html.unescape(rendered)
+
+    assert "0 -> 1" in formatted
+    assert "1 -> 2" in formatted
+    assert "2 -> 3" in formatted
+    assert "3 -> 14" in formatted
+    assert "4 -> print()" in formatted
+    assert "'a' -> 1" in formatted
+    assert "'b' -> 2" in formatted
+    assert "'c' -> 3" in formatted
+    assert "{\n  8\n  9\n}" in formatted
+    assert "Before: [\n  0 -> 1" in formatted
+    assert "After:  [\n  0 -> 1" in formatted
+    assert "Before: {\n  8\n  9\n}" in formatted
+    assert "Before: {\n  'a' -> 1" in formatted
+    assert '{"type": "set"' not in formatted
+    assert '{"type": "builtin_function_or_method"}' not in formatted
 
 
 def test_readme_lists_current_team_members():
