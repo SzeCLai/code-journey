@@ -281,6 +281,93 @@ def test_raised_condition_is_not_misreported_as_false():
     assert condition.preview == "check() (value unavailable)"
 
 
+def test_condition_evaluation_omits_duplicate_expression():
+    result = run_viz("if 1 == 1 and 1 == 1:\n    answer = 1\n")
+    condition = next(
+        event.condition_preview for event in result.events if event.condition_preview
+    )
+    rendered = result._repr_html_()
+
+    assert condition.preview == "1 == 1 and 1 == 1 -> True"
+    assert "1 == 1 and 1 == 1 -&gt; True" in rendered
+    assert (
+        "1 == 1 and 1 == 1 -&gt; 1 == 1 and 1 == 1 -&gt; True"
+        not in rendered
+    )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_steps", "expected_statuses", "expected_values"),
+    [
+        (
+            "1 == 2 and 1 == 1",
+            ["1 == 2", "1 == 1"],
+            ["evaluated", "skipped"],
+            ["False", "Not evaluated"],
+        ),
+        (
+            "1 == 1 and 2 == 2",
+            ["1 == 1", "2 == 2"],
+            ["evaluated", "evaluated"],
+            ["True", "True"],
+        ),
+        (
+            "1 == 1 or 2 == 2",
+            ["1 == 1", "2 == 2"],
+            ["evaluated", "skipped"],
+            ["True", "Not evaluated"],
+        ),
+        (
+            "1 == 2 or 2 == 2",
+            ["1 == 2", "2 == 2"],
+            ["evaluated", "evaluated"],
+            ["False", "True"],
+        ),
+    ],
+)
+def test_boolean_condition_previews_show_short_circuit_steps(
+    expression, expected_steps, expected_statuses, expected_values
+):
+    result = run_viz(f"if {expression}:\n    answer = 1\n")
+    condition = next(
+        event.condition_preview for event in result.events if event.condition_preview
+    )
+
+    assert [step.expression for step in condition.evaluations] == expected_steps
+    assert [step.status for step in condition.evaluations] == expected_statuses
+    assert [step.value for step in condition.evaluations] == expected_values
+    rendered = result._repr_html_()
+    assert "SHORT-CIRCUIT STEPS" in rendered
+    assert "cj-condition-part-evaluated" in rendered
+    assert "Step 1:" in rendered
+    assert "box-shadow: none !important" in rendered
+    assert "background: transparent !important" in rendered
+    assert "border-left: 4px solid #2563eb !important" in rendered
+    if expected_statuses[1] == "skipped":
+        assert condition.evaluations[1].note.startswith("Short-circuited:")
+        assert "cj-condition-part-skipped" in rendered
+    else:
+        assert "evaluates the next operand" in condition.evaluations[1].note
+
+
+def test_unsupported_boolean_operand_is_not_reexecuted_for_preview():
+    result = run_viz(
+        "calls = 0\n"
+        "def check():\n"
+        "    global calls\n"
+        "    calls += 1\n"
+        "    return True\n"
+        "if check() and 1 == 1:\n"
+        "    answer = 1\n"
+    )
+    condition = next(
+        event.condition_preview for event in result.events if event.condition_preview
+    )
+
+    assert result.events[-1].after["calls"] == 1
+    assert [step.status for step in condition.evaluations] == ["unknown", "unknown"]
+
+
 def test_variable_diffs_identify_added_modified_and_removed_variables():
     result = run_viz("value = 1\nvalue = 2\ndel value\n")
     diffs = [
@@ -437,6 +524,11 @@ def test_html_visualizer_uses_notebook_safe_controls_and_escapes_source():
     assert "Iteration" in rendered
     assert "What changed?" in rendered
     assert "cj-current" in rendered
+    assert ".codejourney .cj-source {" in rendered
+    assert "background: #ffffff !important" in rendered
+    assert "color: #172033 !important" in rendered
+    assert "color-scheme: light" in rendered
+    assert "background: #fff0b3 !important" in rendered
     assert "Linked to items" in rendered
     assert "<script>alert(1)</script>" not in rendered
     assert "&lt;script&gt;" in rendered
@@ -476,3 +568,16 @@ def test_html_has_variables_and_object_boxes_for_python_objects():
     assert "items" in rendered
     assert "alias" in rendered
     assert "[\n  1,\n  2\n]" in rendered
+
+
+def test_readme_lists_current_team_members():
+    from pathlib import Path
+
+    readme = Path(__file__).resolve().parents[1] / "README.md"
+    contents = readme.read_text(encoding="utf-8")
+    team = contents.split("## Team", 1)[1].split("## ", 1)[0]
+
+    assert "Eric Yiu" in team
+    assert "Yuen Cheng" in team
+    assert "Jason Lai" in team
+    assert "placeholder" not in team.lower()

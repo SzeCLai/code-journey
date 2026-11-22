@@ -20,6 +20,7 @@ from .analysis import (
 __all__ = [
     "AliasInfo",
     "CollectionSnapshot",
+    "ConditionEvaluation",
     "ConditionInfo",
     "ConditionPreview",
     "EducationalWarning",
@@ -108,11 +109,20 @@ class LoopBoundary:
 
 
 @dataclass(frozen=True)
+class ConditionEvaluation:
+    expression: str
+    value: str
+    status: str
+    note: str
+
+
+@dataclass(frozen=True)
 class ConditionPreview:
     condition_id: str
     expression: str
     preview: str
     result: Optional[bool]
+    evaluations: Tuple[ConditionEvaluation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -405,7 +415,10 @@ def _condition_preview(
         substituted = condition.expression
 
     if substitute is not None and substitute.complete and result is not None:
-        preview = f"{condition.expression} -> {substituted} -> {result}"
+        if condition.expression == substituted:
+            preview = f"{substituted} -> {result}"
+        else:
+            preview = f"{condition.expression} -> {substituted} -> {result}"
     else:
         preview = f"{condition.expression} (value unavailable)"
     return ConditionPreview(condition.condition_id, condition.expression, preview, result)
@@ -453,10 +466,155 @@ def _sanitize_loop_iterations(
 _MISSING = object()
 
 
+def _safe_condition_value(node: Any, values: Dict[str, Any]) -> Any:
+    import ast
+
+    safe_types = (type(None), bool, int, float, str)
+    if isinstance(node, ast.Constant):
+        return node.value if type(node.value) in safe_types else _MISSING
+    if isinstance(node, ast.Name):
+        value = values.get(node.id, _MISSING)
+        return value if type(value) in safe_types else _MISSING
+    if isinstance(node, ast.UnaryOp):
+        operand = _safe_condition_value(node.operand, values)
+        if operand is _MISSING:
+            return _MISSING
+        if isinstance(node.op, ast.Not):
+            return not operand
+        if type(operand) in (int, float):
+            if isinstance(node.op, ast.UAdd):
+                return +operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+    if isinstance(node, ast.Compare):
+        left = _safe_condition_value(node.left, values)
+        if left is _MISSING:
+            return _MISSING
+        for operation, comparator in zip(node.ops, node.comparators):
+            right = _safe_condition_value(comparator, values)
+            if right is _MISSING:
+                return _MISSING
+            try:
+                if isinstance(operation, ast.Eq):
+                    matched = left == right
+                elif isinstance(operation, ast.NotEq):
+                    matched = left != right
+                elif isinstance(operation, ast.Lt):
+                    matched = left < right
+                elif isinstance(operation, ast.LtE):
+                    matched = left <= right
+                elif isinstance(operation, ast.Gt):
+                    matched = left > right
+                elif isinstance(operation, ast.GtE):
+                    matched = left >= right
+                elif isinstance(operation, ast.Is):
+                    matched = left is right
+                elif isinstance(operation, ast.IsNot):
+                    matched = left is not right
+                elif (
+                    isinstance(operation, (ast.In, ast.NotIn))
+                    and type(right) is str
+                    and type(left) is str
+                ):
+                    matched = left in right
+                    if isinstance(operation, ast.NotIn):
+                        matched = not matched
+                else:
+                    return _MISSING
+            except TypeError:
+                return _MISSING
+            if not matched:
+                return False
+            left = right
+        return True
+    return _MISSING
+
+
+def _condition_evaluations(expression: Any, values: Dict[str, Any]) -> Tuple[ConditionEvaluation, ...]:
+    import ast
+
+    evaluations = []
+
+    def value_text(value: Any) -> str:
+        if value is _MISSING:
+            return "Value unavailable"
+        return repr(value)
+
+    def visit(node: Any) -> Any:
+        if not isinstance(node, ast.BoolOp):
+            value = _safe_condition_value(node, values)
+            evaluations.append(
+                ConditionEvaluation(
+                    ast.unparse(node),
+                    value_text(value),
+                    "evaluated" if value is not _MISSING else "unknown",
+                    (
+                        "This operand was evaluated in Python's left-to-right order."
+                        if value is not _MISSING
+                        else "Not previewed safely; CodeJourney does not re-run this expression."
+                    ),
+                )
+            )
+            return value
+
+        is_and = isinstance(node.op, ast.And)
+        operator_name = "and" if is_and else "or"
+        previous_value = _MISSING
+        for index, operand in enumerate(node.values):
+            if previous_value is not _MISSING and (
+                (is_and and not previous_value) or (not is_and and previous_value)
+            ):
+                truth = bool(previous_value)
+                evaluations.append(
+                    ConditionEvaluation(
+                        ast.unparse(operand),
+                        "Not evaluated",
+                        "skipped",
+                        f"Short-circuited: {truth} {operator_name} ... skips this operand.",
+                    )
+                )
+                continue
+            if previous_value is _MISSING and index > 0:
+                evaluations.append(
+                    ConditionEvaluation(
+                        ast.unparse(operand),
+                        "Value unavailable",
+                        "unknown",
+                        "Whether Python evaluates this operand cannot be previewed safely.",
+                    )
+                )
+                continue
+            if isinstance(operand, ast.BoolOp):
+                current_value = visit(operand)
+            else:
+                current_value = _safe_condition_value(operand, values)
+                evaluations.append(
+                    ConditionEvaluation(
+                        ast.unparse(operand),
+                        value_text(current_value),
+                        "evaluated" if current_value is not _MISSING else "unknown",
+                        (
+                            "First operand is evaluated."
+                            if index == 0
+                            else f"Previous operand was {bool(previous_value)}; {operator_name} evaluates the next operand."
+                        )
+                        if current_value is not _MISSING
+                        else "Not previewed safely; CodeJourney does not re-run this expression.",
+                    )
+                )
+            previous_value = current_value
+        return previous_value
+
+    if isinstance(expression, ast.BoolOp):
+        visit(expression)
+    return tuple(evaluations)
+
+
 def _attach_condition_previews(
     events: list[TraceEvent],
     conditions: Tuple[ConditionInfo, ...],
 ) -> list[TraceEvent]:
+    import ast
     import dataclasses
 
     by_line = {condition.line_number: condition for condition in conditions}
@@ -488,9 +646,17 @@ def _attach_condition_previews(
             for name, value in event.after.items()
             if type(value) in (type(None), bool, int, float, str)
         }
+        try:
+            condition_tree = ast.parse(condition.expression, mode="eval").body
+            evaluations = _condition_evaluations(condition_tree, values)
+        except (SyntaxError, ValueError):
+            evaluations = ()
         enriched[index] = dataclasses.replace(
             event,
-            condition_preview=_condition_preview(condition, values, result),
+            condition_preview=dataclasses.replace(
+                _condition_preview(condition, values, result),
+                evaluations=evaluations,
+            ),
         )
     return enriched
 

@@ -183,16 +183,38 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
             result_text = "? UNKNOWN"
             result_class = "cj-condition-unknown"
 
+        steps_html = ""
+        if condition.evaluations:
+            steps_html = (
+                '<div class="cj-condition-steps" aria-label="Short-circuit evaluation steps">'
+                '<div class="cj-condition-heading">SHORT-CIRCUIT STEPS</div>'
+                + "".join(
+                    '<div class="cj-condition-part cj-condition-part-'
+                    + html.escape(step.status)
+                    + '"><code>'
+                    + html.escape(step.expression)
+                    + '</code><strong>'
+                    + html.escape(step.value)
+                    + '</strong><span>Step '
+                    + str(step_number)
+                    + ': '
+                    + html.escape(step.note)
+                    + '</span></div>'
+                    for step_number, step in enumerate(condition.evaluations, start=1)
+                )
+                + "</div>"
+            )
+
         condition_html = (
             '<div class="cj-condition-card">'
             '<div class="cj-condition-heading">CONDITION</div>'
             f'<div class="cj-condition-expression">{expression}</div>'
             '<div class="cj-condition-heading">EVALUATION</div>'
             f'<div class="cj-condition-preview">{preview}</div>'
-            f'<div class="cj-condition-result {result_class}">'
-            f'{result_text}'
-            '</div>'
-            '</div>'
+            + steps_html
+            + f'<div class="cj-condition-result {result_class}">'
+            + result_text
+            + "</div></div>"
         )
 
     warning_html = "".join(
@@ -393,10 +415,11 @@ def render_html(result: TraceResult) -> str:
 .cj-panel {{ min-width: 0; border: 1px solid #e1e5ec; border-radius: 8px; padding: 10px; }}
 .cj-panel h3 {{ font-size: 14px; margin: 0 0 8px; }}
 .cj-panel h3:not(:first-child) {{ margin-top: 14px; }}
-.cj-source {{ overflow: auto; margin: 0; background: #f7f8fa; border-radius: 6px; padding: 8px; white-space: pre; }}
-.cj-source-line {{ display: block; min-height: 1.45em; }}
-.cj-source-line.cj-current {{ background: #fff0b3; outline: 1px solid #f1d46b; }}
-.cj-line-number {{ user-select: none; color: #8490a2; }}
+.codejourney .cj-source {{ overflow: auto; margin: 0; background: #ffffff !important; color: #172033 !important; color-scheme: light; border-radius: 6px; padding: 8px; white-space: pre; }}
+.codejourney .cj-source code, .codejourney .cj-source-line {{ color: #172033 !important; }}
+.codejourney .cj-source-line {{ display: block; min-height: 1.45em; background-color: #ffffff; }}
+.codejourney .cj-source-line.cj-current {{ background: #fff0b3 !important; color: #172033 !important; outline: 1px solid #c49a18; }}
+.codejourney .cj-line-number {{ user-select: none; color: #5e6b7b !important; }}
 .cj-state {{ margin: 0 0 10px; }}
 .cj-badge {{ display: inline-block; background: #e8efff; border-radius: 999px; padding: 3px 9px; font-size: 12px; }}
 
@@ -457,6 +480,16 @@ def render_html(result: TraceResult) -> str:
     background: #e2e8f0;
     color: #475569;
 }}
+
+.codejourney .cj-condition-steps {{ display: flex; flex-direction: column; gap: 6px; color-scheme: light; }}
+.codejourney .cj-condition-part {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; border: 1px solid #cbd5e1 !important; background: #ffffff !important; color: #1e293b !important; color-scheme: light; box-shadow: none !important; }}
+.codejourney .cj-condition-part code, .codejourney .cj-condition-part strong, .codejourney .cj-condition-part span {{ background: transparent !important; border: 0 !important; box-shadow: none !important; color: #1e293b !important; text-shadow: none !important; }}
+.codejourney .cj-condition-part code {{ overflow-wrap: anywhere; }}
+.codejourney .cj-condition-part strong {{ font-family: monospace; }}
+.codejourney .cj-condition-part span {{ grid-column: 1 / -1; color: #475569 !important; font-size: 12px; }}
+.codejourney .cj-condition-part-evaluated {{ background: #eff6ff !important; border-color: #60a5fa !important; border-left: 4px solid #2563eb !important; }}
+.codejourney .cj-condition-part-skipped {{ background: #f1f5f9 !important; border-left: 4px solid #64748b !important; color: #334155 !important; }}
+.codejourney .cj-condition-part-unknown {{ background: #fffbeb !important; border-left: 4px solid #d97706 !important; border-color: #fbbf24 !important; }}
 
 .cj-variables {{ display: flex; flex-direction: column; gap: 7px; }}
 .cj-variable {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 9px; background: #edf4ff; border: 1px solid #cfddf4; border-radius: 6px; }}

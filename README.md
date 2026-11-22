@@ -28,7 +28,8 @@ against the repository source:
   diffs, collection mutations, and runtime or syntax errors.
 - Supported loop metadata includes `for`, `while`, nested loops, iteration
   boundaries, and known totals when they can be established from source.
-- Safe condition previews can show captured substitutions and results.
+- Safe condition previews show short-circuit evaluation order for supported
+  `and`/`or` operands, including expressions Python skips.
 - Shared object identity is rendered as alias links rather than inferred from
   equal values.
 - The HTML view is CSS-only and is intended to work in notebook renderers that
@@ -199,7 +200,9 @@ that does not produce further counted events.
 - Unsupported values receive safe type-oriented descriptions rather than
   arbitrary representations.
 - Aliases are based on observed shared object identity.
-- Condition previews are not re-evaluated for display.
+- Arbitrary condition expressions are not re-evaluated for display;
+  short-circuit sub-expressions are previewed only when they use supported
+  constants, captured scalar values, and comparisons.
 - Loop totals may be unknown for dynamic iterables or `while` loops.
 - A reached step limit produces a partial visualization and warning.
 - Syntax and runtime errors are represented alongside available partial data;
@@ -226,9 +229,9 @@ most useful for short, reviewable Python examples in Jupyter.
 
 ## Team
 
-- **Member 1:** [Name / responsibility placeholder]
-- **Member 2:** [Name / responsibility placeholder]
-- **Member 3:** [Name / responsibility placeholder]
+- Eric Yiu
+- Yuen Cheng
+- Jason Lai
 
 ## License
 
@@ -238,7 +241,7 @@ official release wording has not been provided here as a completed claim:
 
 ## Version
 
-Current release: 0.1.2
+Current release: 0.1.3
 
 ## Project links
 
