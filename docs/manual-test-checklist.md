@@ -6,30 +6,32 @@ check only after you observe the expected behavior. Do not copy "passed",
 
 ## Verification record
 
-- Tester:
-- Date:
-- Operating system:
-- Python version:
-- Jupyter/IPython environment:
-- CodeJourney version checked:
-- Installation method:
+- Tester: CHENG Nga Yuen
+- Date: 2026-11-21
+- Operating system: Windows 11 client accessing Cityu JupyterHub
+- Python version: Python 3.14.9
+- Jupyter/IPython environment: Cityu JupyterLab, Python 3 (ipykernel)
+- CodeJourney version checked: 0.1.0
+- Installation method:  PyPI (%pip install --upgrade codejourney)
 
 ## Fresh installation
 
 - [ ] Create and activate a fresh virtual environment.
 - [ ] Install the repository development package:
   `python -m pip install -e .`
-- [ ] Confirm that the package metadata or development install reports the
-  intended version.
-- [ ] Start Jupyter/IPython from the environment.
-- [ ] **Pending publication:** do not mark the PyPI installation check until a
-  PyPI release is confirmed and the package can be installed successfully.
+- [x] Install the published package from PyPI:
+  `%pip install --upgrade codejourney`
+- [x] Confirm that the installed package reports version `0.1.0`.
+- [x] Start Jupyter/IPython from the environment.
+- [x] Import `codejourney` without an exception.
 
 **Observed result / notes:**
-
+CodeJourney 0.1.0 installed successfully from PyPI and imported in CityU
+JupyterLab using Python 3.14.9. The Jupyter kernel was restarted after
+installation.
 ## Import
 
-- [ ] Run `import codejourney` without IPython-specific registration errors.
+- [x] Run `import codejourney` without IPython-specific registration errors.
 - [ ] Run `from codejourney import run_viz`.
 - [ ] Confirm `run_viz("answer = 40\nanswer += 2")` returns a trace object.
 - [ ] Confirm an invalid `max_steps` value raises the documented validation
@@ -81,7 +83,12 @@ Use a loop with at least two iterations.
   not make navigation misleading.
 
 **Observed result / notes:**
-
+The loop example produced nine captured steps and three identified iterations.
+Prev and Next moved backward and forward by one captured step. Next Iteration
+moved from Iteration 1 of 3 to Iteration 2 of 3, and Prev Iteration returned
+to the previous iteration. Jump to Next Change advanced to a step where
+`total` changed from `0` to `1`, with the before and after values displayed
+under **What changed?**.
 ## Jump to Next Change
 
 - [ ] Start before a variable assignment or collection mutation.
