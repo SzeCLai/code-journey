@@ -56,7 +56,7 @@ CodeJourney is published on PyPI
 ```bash
 python -m pip install codejourney
 ```
-PyPI package: https://pypi.org/project/codejourney/ 
+PyPI package: https://pypi.org/project/codejourney/
 After installation, restart the Jupyter kernel before importing the package
 
 ### Development installation
@@ -238,7 +238,7 @@ official release wording has not been provided here as a completed claim:
 
 ## Version
 
-Current release: 0.1.1
+Current release: 0.1.2
 
 ## Project links
 

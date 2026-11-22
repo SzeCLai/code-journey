@@ -374,8 +374,6 @@ def render_html(result: TraceResult) -> str:
             + "".join(timeline)
             + "</div>"
         )
-        print("Views:", views)
-        print("View types:", [type(view) for view in views])
         views_html = '<div class="cj-views">' + "".join(views) + "</div>"
 
     return f"""<div class="codejourney {scope}">

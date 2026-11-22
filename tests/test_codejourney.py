@@ -161,6 +161,15 @@ def test_cell_magic_returns_the_structured_trace():
     assert result.events[-1].after["answer"] == 42
 
 
+def test_cell_magic_renders_html_without_debug_output(capsys):
+    result = codejourney.pyviz("", "answer = 42")
+    rendered = result._repr_html_()
+    output = capsys.readouterr().out
+
+    assert "class=\"cj-view\"" in rendered
+    assert output == ""
+
+
 def test_ast_analysis_extracts_loop_metadata_and_known_iteration_count():
     result = run_viz("total = 0\nfor value in range(2, 5):\n    total += value\n")
 
