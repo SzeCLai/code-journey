@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import linecache
 import sys
 import types
 import uuid
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -147,6 +149,7 @@ class TraceEvent:
     condition_preview: Optional[ConditionPreview] = None
     warning_codes: Tuple[str, ...] = ()
     frame_id: int = 0
+    output: str = ""
 
     @property
     def variables(self) -> Dict[str, Any]:
@@ -708,6 +711,7 @@ def run_viz(code_str: str, *, max_steps: int = 500) -> TraceResult:
     namespace: Dict[str, Any] = {"__name__": "__main__"}
     error: Optional[ExecutionError] = None
     truncated = False
+    output = io.StringIO()
 
     try:
         analysis = analyze_source(code_str)
@@ -891,6 +895,7 @@ def run_viz(code_str: str, *, max_steps: int = 500) -> TraceResult:
                 loop_boundaries=tuple(boundaries),
                 warning_codes=tuple(dict.fromkeys(warning_codes)),
                 frame_id=frame_id,
+                output=output.getvalue(),
             )
         )
         if event == "return":
@@ -902,7 +907,8 @@ def run_viz(code_str: str, *, max_steps: int = 500) -> TraceResult:
     previous_trace = sys.gettrace()
     try:
         sys.settrace(trace)
-        exec(compiled, namespace, namespace)
+        with redirect_stdout(output):
+            exec(compiled, namespace, namespace)
     except _StepLimitReached:
         truncated = True
     except Exception as exc:

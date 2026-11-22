@@ -24,6 +24,9 @@ against the repository source:
 - `run_viz(code_str, *, max_steps=500)` returns structured trace data.
 - `%%pyviz` runs a Python cell and displays the resulting trace in IPython or
   Jupyter.
+- Standard output is captured as execution proceeds and shown in an Output
+  card that follows the selected trace step, rather than as separate notebook
+  cell output.
 - Captured trace events include source lines, variable snapshots, variable
   diffs, collection mutations, and runtime or syntax errors.
 - Supported loop metadata includes `for`, `while`, nested loops, iteration
@@ -142,7 +145,8 @@ The magic returns a `TraceResult`; outside a live IPython environment, use
 
 The notebook view provides the following controls:
 
-- **Timeline ticks** — select a numbered execution step directly.
+- **Timeline ticks** — select an execution step directly.
+- **END** — select the final execution state; it follows the numbered steps.
 - **Prev** — move to the previous captured execution step.
 - **Next** — move to the next captured execution step.
 - **Prev Iteration** — move to the previous loop-start boundary.
@@ -150,6 +154,7 @@ The notebook view provides the following controls:
 - **Jump to Next Change** — move to the next later step that reports a variable
   diff.
 - **Step counter** — show the selected step and total number of captured steps.
+- **Output** — show accumulated standard output through the selected state.
 - **Source panel** — highlight the source line associated with the selected
   execution state.
 - **Variables** — show variable names and scalar or collection values captured
@@ -158,8 +163,8 @@ The notebook view provides the following controls:
   object-valued variables.
 - **What changed?** — show added, removed, or modified variables and, when
   available, affected list indices or dictionary keys.
-- **Learning notes** — show supported educational warnings, the execution
-  error, and trace-limit truncation notices.
+- **Learning notes** — show supported educational warnings, execution errors
+  from the step where they occur onward, and trace-limit truncation notices.
 - **Iteration badge** — show loop iteration context when available.
 
 Controls disabled for the current step or state are shown as unavailable.
@@ -241,7 +246,7 @@ official release wording has not been provided here as a completed claim:
 
 ## Version
 
-Current release: 0.1.3
+Current release: 0.2.0
 
 ## Project links
 

@@ -136,7 +136,13 @@ def _diffs_html(event: TraceEvent) -> str:
 
 
  
-def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -> str:
+def _view_html(
+    result: TraceResult,
+    event: TraceEvent,
+    index: int,
+    scope: str,
+    show_error: bool,
+) -> str:
     source_lines = result.source.splitlines()
     line_markup = "\n".join(
         f'<span class="cj-source-line{" cj-current" if number == event.line_number else ""}">'
@@ -229,7 +235,7 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
     )
 
     error_html = ""
-    if result.error is not None:
+    if result.error is not None and show_error:
         error_html = (
             '<li class="cj-error">'
             + html.escape(result.error.type_name)
@@ -272,22 +278,38 @@ def render_html(result: TraceResult) -> str:
         for event in result.events
         if event.line_number is not None and event.line_number > 0
     )
-    if events:
-        initial_index = next(
-            (
-                index
-                for index, event in enumerate(events)
-                if event.after or event.variable_diffs
-            ),
-            0,
-        )
-    else:
-        initial_index = -1
+    initial_index = 0 if events else -1
+
+    error_index = None
+    if result.error is not None:
+        exception_indices = [
+            index
+            for index, event in enumerate(events)
+            if event.event == "exception"
+        ]
+        matching_errors = [
+            index
+            for index in exception_indices
+            if events[index].exception_type == result.error.type_name
+            and events[index].line_number == result.error.line_number
+        ]
+        matching_type = [
+            index
+            for index in exception_indices
+            if events[index].exception_type == result.error.type_name
+        ]
+        if matching_errors:
+            error_index = matching_errors[-1]
+        elif matching_type:
+            error_index = matching_type[-1]
+        elif exception_indices:
+            error_index = exception_indices[-1]
 
     controls = []
     timeline = []
     views = []
     selectors = []
+    output_states = []
     count = len(events)
     for index, event in enumerate(events):
         selector_id = f"{scope}-step-{index}"
@@ -358,14 +380,34 @@ def render_html(result: TraceResult) -> str:
         controls.append(
             f'<div class="cj-controls" data-step-controls="{index}">'
             + "".join(control_labels)
-            + f'<span class="cj-counter">{index + 1} / {count}</span></div>'
+            + f'<span class="cj-counter">'
+            + ("END" if index == count - 1 else str(index + 1))
+            + f' / {count}</span></div>'
         )
+        tick_label = "END" if index == count - 1 else str(index + 1)
         timeline.append(
             f'<label class="cj-tick" role="button" for="{selector_id}" '
-            f'aria-label="Go to step {index + 1}" title="Step {index + 1}">'
-            f"{index + 1}</label>"
+            f'aria-label="Go to {tick_label}" title="{tick_label}">'
+            f"{tick_label}</label>"
         )
-        views.append(_view_html(result, event, index, scope))
+        output_content = (
+            f"<pre>{html.escape(event.output)}</pre>"
+            if event.output
+            else '<p class="cj-output-empty">No output at this step.</p>'
+        )
+        output_states.append(
+            f'<div class="cj-output-state" data-output-index="{index}">'
+            f"{output_content}</div>"
+        )
+        views.append(
+            _view_html(
+                result,
+                event,
+                index,
+                scope,
+                error_index is not None and index >= error_index,
+            )
+        )
 
     rules = []
     for index in range(count):
@@ -373,6 +415,10 @@ def render_html(result: TraceResult) -> str:
         rules.append(
             f"#{selector_id}:checked ~ .cj-controls[data-step-controls='{index}']"
             "{display:flex}"
+        )
+        rules.append(
+            f"#{selector_id}:checked ~ .cj-output-card .cj-output-state[data-output-index='{index}']"
+            "{display:block}"
         )
         rules.append(
             f"#{selector_id}:checked ~ .cj-views .cj-view[data-index='{index}']"
@@ -384,25 +430,40 @@ def render_html(result: TraceResult) -> str:
         )
 
     if not events:
-        selector_html = '<p class="cj-empty">No execution steps captured.</p>'
+        selector_html = ""
+        empty_state_html = '<p class="cj-empty">No execution steps captured.</p>'
         controls_html = ""
         timeline_html = ""
         views_html = ""
+        output_states_html = '<p class="cj-output-empty">No output captured.</p>'
     else:
         selector_html = "".join(selectors)
+        empty_state_html = ""
         controls_html = "".join(controls)
+        output_states_html = "".join(output_states)
         timeline_html = (
             '<div class="cj-timeline" role="group" aria-label="Execution timeline">'
             + "".join(timeline)
             + "</div>"
         )
         views_html = '<div class="cj-views">' + "".join(views) + "</div>"
+    output_card_html = (
+        '<section class="cj-output-card" aria-label="Output">'
+        "<h3>Output</h3>"
+        + output_states_html
+        + "</section>"
+    )
 
     return f"""<div class="codejourney {scope}">
 <style>
 .codejourney {{ font: 14px/1.45 system-ui, sans-serif; color: #172033; background: #fff; border: 1px solid #d5dbe6; border-radius: 10px; padding: 14px; }}
 .codejourney * {{ box-sizing: border-box; }}
 .cj-selector {{ position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }}
+.cj-output-card {{ margin: 0 0 12px; padding: 10px 12px; border: 1px solid #334155; border-radius: 8px; background: #172033; color: #f8fafc; color-scheme: dark; }}
+.cj-output-card h3 {{ margin: 0 0 8px; color: #fff; font-size: 14px; }}
+.cj-output-state {{ display: none; }}
+.cj-output-card pre {{ max-height: 260px; overflow: auto; margin: 0; padding: 9px 10px; border-radius: 5px; background: #0b1220 !important; color: #f8fafc !important; white-space: pre-wrap; overflow-wrap: anywhere; }}
+.cj-output-empty {{ margin: 0; color: #dbeafe; }}
 .cj-controls {{ display: none; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }}
 .cj-button {{ border: 1px solid #aeb8c8; background: #f7f9fc; border-radius: 6px; padding: 6px 10px; cursor: pointer; color: inherit; }}
 .cj-button:hover {{ background: #e9eff8; }}
@@ -510,6 +571,8 @@ def render_html(result: TraceResult) -> str:
 {''.join(rules)}
 </style>
 {selector_html}
+{output_card_html}
+{empty_state_html}
 {controls_html}
 {timeline_html}
 {views_html}

@@ -170,6 +170,64 @@ def test_cell_magic_renders_html_without_debug_output(capsys):
     assert output == ""
 
 
+def test_cell_magic_captures_stepwise_stdout_in_top_output_card(capsys):
+    result = codejourney.pyviz("", "print('first')\nprint('second')\n")
+    rendered = result._repr_html_()
+    normal_output = capsys.readouterr().out
+
+    assert normal_output == ""
+    output_card = '<section class="cj-output-card" aria-label="Output">'
+    assert output_card in rendered
+    assert rendered.index(output_card) < rendered.index('<div class="cj-controls"')
+    assert "class=\"cj-output-state\" data-output-index=\"0\"" in rendered
+    assert "first\nsecond\n" in rendered
+    assert "background: #172033" in rendered
+    assert "color: #f8fafc" in rendered
+    assert result.events[-1].output == "first\nsecond\n"
+    assert any(event.output == "first\n" for event in result.events)
+
+
+def test_error_learning_note_starts_at_exception_step():
+    result = run_viz("answer = 1\nraise ValueError('bad input')\n")
+    rendered = result._repr_html_()
+    exception_index = next(
+        index
+        for index, event in enumerate(result.events)
+        if event.event == "exception" and event.exception_type == "ValueError"
+    )
+    views = re.findall(
+        r'<section class="cj-view" data-index="(\d+)">(.*?)(?=<section class="cj-view"|<p class="cj-muted">Educational trace)',
+        rendered,
+        re.DOTALL,
+    )
+
+    assert views
+    assert all(
+        ("ValueError: bad input" in view) == (int(index) >= exception_index)
+        for index, view in views
+    )
+
+
+def test_timeline_marks_final_state_as_end_and_keeps_navigation():
+    rendered = run_viz("first = 1\nsecond = 2\n")._repr_html_()
+    ticks = re.findall(r'<label class="cj-tick"[^>]*>(.*?)</label>', rendered)
+
+    assert ticks[-1] == "END"
+    assert "aria-label=\"Go to END\" title=\"END\"" in rendered
+    assert f"END / {len(ticks)}" in rendered
+    assert "Prev</label>" in rendered
+    assert "Next</label>" in rendered
+
+
+def test_visualizer_initializes_at_step_one():
+    rendered = run_viz("first = 1\nsecond = 2\n")._repr_html_()
+    selectors = re.findall(r'<input class="cj-selector"[^>]*>', rendered)
+
+    assert len(selectors) > 1
+    assert " checked>" in selectors[0]
+    assert all(" checked>" not in selector for selector in selectors[1:])
+
+
 def test_ast_analysis_extracts_loop_metadata_and_known_iteration_count():
     result = run_viz("total = 0\nfor value in range(2, 5):\n    total += value\n")
 
