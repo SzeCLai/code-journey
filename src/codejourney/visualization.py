@@ -135,6 +135,7 @@ def _diffs_html(event: TraceEvent) -> str:
     return "\n".join(cards)
 
 
+ 
 def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -> str:
     source_lines = result.source.splitlines()
     line_markup = "\n".join(
@@ -159,15 +160,41 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
     if boundary is not None:
         total = boundary.total_iterations if boundary.total_iterations is not None else "?"
         iteration_text = f"Iteration {boundary.iteration_index + 1} of {total} · iteration begins"
+
     aliases_text = "; ".join(alias.label for alias in event.aliases)
     if aliases_text:
         iteration_text += " · " + aliases_text
 
-    condition_html = (
-        f'<p class="cj-condition">{html.escape(event.condition_preview.preview)}</p>'
-        if event.condition_preview is not None
-        else ""
-    )
+    condition_html = ""
+
+    if event.condition_preview is not None:
+        condition = event.condition_preview
+
+        expression = html.escape(condition.expression)
+        preview = html.escape(condition.preview)
+
+        if condition.result is True:
+            result_text = "✓ TRUE"
+            result_class = "cj-condition-true"
+        elif condition.result is False:
+            result_text = "✕ FALSE"
+            result_class = "cj-condition-false"
+        else:
+            result_text = "? UNKNOWN"
+            result_class = "cj-condition-unknown"
+
+        condition_html = (
+            '<div class="cj-condition-card">'
+            '<div class="cj-condition-heading">CONDITION</div>'
+            f'<div class="cj-condition-expression">{expression}</div>'
+            '<div class="cj-condition-heading">EVALUATION</div>'
+            f'<div class="cj-condition-preview">{preview}</div>'
+            f'<div class="cj-condition-result {result_class}">'
+            f'{result_text}'
+            '</div>'
+            '</div>'
+        )
+
     warning_html = "".join(
         f'<li class="cj-warning">{html.escape(warning.message)}'
         + (
@@ -178,6 +205,7 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
         + "</li>"
         for warning in result.warnings
     )
+
     error_html = ""
     if result.error is not None:
         error_html = (
@@ -187,6 +215,7 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
             + html.escape(result.error.message)
             + "</li>"
         )
+
     if result.truncated:
         warning_html += (
             '<li class="cj-warning">Trace stopped after '
@@ -206,6 +235,7 @@ def _view_html(result: TraceResult, event: TraceEvent, index: int, scope: str) -
     </section>
   </div>
 </section>"""
+
 
 
 def render_html(result: TraceResult) -> str:
@@ -344,6 +374,8 @@ def render_html(result: TraceResult) -> str:
             + "".join(timeline)
             + "</div>"
         )
+        print("Views:", views)
+        print("View types:", [type(view) for view in views])
         views_html = '<div class="cj-views">' + "".join(views) + "</div>"
 
     return f"""<div class="codejourney {scope}">
@@ -369,7 +401,65 @@ def render_html(result: TraceResult) -> str:
 .cj-line-number {{ user-select: none; color: #8490a2; }}
 .cj-state {{ margin: 0 0 10px; }}
 .cj-badge {{ display: inline-block; background: #e8efff; border-radius: 999px; padding: 3px 9px; font-size: 12px; }}
-.cj-condition {{ margin: 8px 0 0; color: #385883; }}
+
+.cj-condition-card {{
+    margin: 12px 0;
+    padding: 16px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}}
+
+.cj-condition-heading {{
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: #64748b;
+}}
+
+.cj-condition-expression {{
+    font-family: monospace;
+    font-size: 16px;
+    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 8px;
+}}
+
+.cj-condition-preview {{
+    font-family: monospace;
+    font-size: 13px;
+    color: #475569;
+    background: #e2e8f0;
+    padding: 9px 12px;
+    border-radius: 6px;
+}}
+
+.cj-condition-result {{
+    align-self: flex-start;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 12px;
+}}
+
+.cj-condition-true {{
+    background: #dcfce7;
+    color: #166534;
+}}
+
+.cj-condition-false {{
+    background: #fee2e2;
+    color: #991b1b;
+}}
+
+.cj-condition-unknown {{
+    background: #e2e8f0;
+    color: #475569;
+}}
+
 .cj-variables {{ display: flex; flex-direction: column; gap: 7px; }}
 .cj-variable {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 9px; background: #edf4ff; border: 1px solid #cfddf4; border-radius: 6px; }}
 .cj-variable-name {{ font-weight: 650; }}
